@@ -26,6 +26,7 @@ def parseCSVFile(csvFile):
             instanceName = get_val('instanceName',row)
             subSystems = get_val('subSystems', row)
             applicationName = get_val('SCMApplicationName', row)
+            portNumber = get_val('PortNumber', row)
 
             propertiesMap = {}
             propertiesMap['serverName'] = serverName
@@ -33,6 +34,7 @@ def parseCSVFile(csvFile):
             propertiesMap['instanceName'] = instanceName
             propertiesMap['subSystems'] = subSystems
             propertiesMap['applicationName'] = applicationName
+            propertiesMap['portNumber'] = portNumber
             envsMap[serverName] = propertiesMap
 
     return envsMap
@@ -85,17 +87,18 @@ def readCi(id):
     try:
         return repository.read(id)
     except:
-        return None    
+        return None
 
 def newDict(name, entries):
     return repository.create(factory.configurationItem('Environments/' + importLocation + '/' + name, 'udm.Dictionary', {'entries': entries}))
 
-def newTcServer(name, subsystem, host, tomcatHome):
+def newTcServer(name, subsystem, host, port, tomcatHome):
     print "creating TcServer: " + name + " on host " + str(host)
 
     startCommand = tomcatHome + 'bin/tcruntime-ctl.sh start > /dev/null'
     stopCommand = tomcatHome + 'bin/tcruntime-ctl.sh stop > /dev/null'
-    statusCommand = 'netstat -na | grep 8080 | grep -q LISTEN'
+    #statusCommand = 'netstat -na | grep 8080 | grep -q LISTEN'
+    statusCommand = 'netstat -na | grep ' + port + ' | grep -q LISTEN'
     tags = []
     if isinstance(subsystem, list):
         tags = subsystem
@@ -121,8 +124,8 @@ def newTcServer(name, subsystem, host, tomcatHome):
         return repository.update(tcServer)
 
 
-def newVirtualHost(name, applicationName, tcServer, subsystem, host):   #defining virtualHost on the infrastructure 
-    print "creating Tomcat VirtualHost: " + name + " on host " + str(host) # give the print statement 
+def newVirtualHost(name, applicationName, tcServer, subsystem, host):
+    print "creating Tomcat VirtualHost: " + name + " on host " + str(host)
 
     tomcatHome = '/app/tomcat/' + applicationName
 
@@ -135,9 +138,6 @@ def newVirtualHost(name, applicationName, tcServer, subsystem, host):   #definin
         tags = subsystem
     elif isinstance(subsystem, basestring):
         tags = subsystem.split(',')
-    i=0                      # tags in upper case 
-    for tag in tags:
-        tags[i]=tag.upper()
 
     tcVirtualHost = factory.configurationItem(tcServer.id + '/' + name, 'tomcat.VirtualHost',
         {
@@ -177,6 +177,7 @@ def run():
         subSystems = get_val('subSystems', vals[val])
         fullQualifiedServername = serverName + '.' + fqdn
         applicationName = get_val('applicationName', vals[val])
+        portNumber = get_val('portNumber', vals[val])
 
         infraRootDir = 'Infrastructure/' + importLocation
         newDirectoryIfNotExists(infraRootDir)
@@ -224,19 +225,26 @@ def run():
         host = newUnixHost(infraRootDir, serverName, fullQualifiedServername, [])
         instanceNames = [x.strip() for x in instanceNames.split(',')]
         subSystems = [x.strip() for x in subSystems.split(',')]
+        portNumber = [x.strip() for x in portNumber.split(',')]
+        print portNumber
         i = 0
         if len(instanceNames) == 1:
             for subsystem in subSystems:
                 tcname = 'tcserver_' + instanceNames[0]
                 tomcatHome = '/app/tomcat/' + instanceNames[0] + '/'
-                tcServer = newTcServer(tcname, subSystems, host, tomcatHome)
+                port = portNumber[0] if len(portNumber) == 1 else portNumber[i]
+                print 'Going for subsystem: '+subsystem+' and port number:'+port
+                tcServer = newTcServer(tcname, subSystems, host, port, tomcatHome)
                 vmName = instanceNames[0].lower() + '_' + serverName
                 newVirtualHost(vmName, subsystem, tcServer, subSystems, host)
+                i += 1
         elif len(instanceNames) > 1:
             for instanceName in instanceNames:
                 tcname = 'tcserver_' + instanceName
                 tomcatHome = '/app/tomcat/' + instanceName + '/'
-                tcServer = newTcServer(tcname, subSystems[i], host, tomcatHome)
+                port = portNumber[0] if len(portNumber) == 1 else portNumber[i]
+                print 'Going for subsystem: ' + subSystems[i] + ' and port number:' + port
+                tcServer = newTcServer(tcname, subSystems[i], host, portNumber[i], tomcatHome)
                 vmName = instanceName+ '_' +serverName
                 newVirtualHost(vmName,subSystems[i],tcServer,subSystems[i],host)
                 i += 1
@@ -246,12 +254,12 @@ def run():
     print "Done creating basic infra"
 
 
-def env_run():  ## adding the environment section 
+def env_run():
     depApp = repository.search("tomcat.VirtualHost")
     vhostlist = {}
     for ci in depApp:
         print ci
-        m = re.search(r'/((PR|DR|DEV|BETA|PTE|STE).*?)/',ci,re.IGNORECASE)
+        m = re.search(r'/((PR|STE|DR|DEV).*?)/',ci,re.IGNORECASE)
         if m:
             env_id = m.group(1)
             if env_id not in vhostlist:
@@ -282,7 +290,7 @@ for opt, arg in opts:
     elif opt in ('-x', '--extraProperties'):
         commandLineProps = ast.literal_eval(arg)
 
-if environmentsFile == None: 
+if environmentsFile == None:
     print helpMessage
 else:
     #print commandLineProps
